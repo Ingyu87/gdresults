@@ -341,6 +341,7 @@ async function requestPerformanceDesign({ grade, subject, domainEntry, requestTe
 }
 
 function createCopyCard(title, content, toneClass = "border-slate-200") {
+  const normalizedContent = normalizeGeneratedText(content);
   const box = document.createElement("div");
   box.className = `p-4 border ${toneClass} rounded-lg bg-white`;
   box.innerHTML = `
@@ -348,11 +349,11 @@ function createCopyCard(title, content, toneClass = "border-slate-200") {
       <h4 class="font-bold text-slate-800">${title}</h4>
       <button type="button" class="copy-performance px-3 py-1 text-sm rounded bg-slate-800 text-white hover:bg-slate-700">복사</button>
     </div>
-    <pre class="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed">${content}</pre>
+    <pre class="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed">${normalizedContent}</pre>
   `;
   const btn = box.querySelector(".copy-performance");
   btn.addEventListener("click", async () => {
-    const ok = await copyToClipboard(content);
+    const ok = await copyToClipboard(normalizedContent);
     showToast(ok ? `${title} 복사 완료` : "복사에 실패했습니다.");
   });
   return box;
@@ -383,16 +384,16 @@ async function downloadPerformanceDocx(payload) {
           new Paragraph({ text: `성취기준: ${payload.standard}` }),
           new Paragraph({ text: "" }),
           new Paragraph({ text: "1) 수행평가 방안", heading: HeadingLevel.HEADING_2 }),
-          ...lineBreakParagraphs(payload.plan_text),
+          ...lineBreakParagraphs(normalizeGeneratedText(payload.plan_text)),
           new Paragraph({ text: "" }),
           new Paragraph({ text: "2) 평가기준(루브릭)", heading: HeadingLevel.HEADING_2 }),
-          ...lineBreakParagraphs(payload.rubric_text),
+          ...lineBreakParagraphs(normalizeGeneratedText(payload.rubric_text)),
           new Paragraph({ text: "" }),
           new Paragraph({ text: "3) 수행평가지(학생용)", heading: HeadingLevel.HEADING_2 }),
-          ...lineBreakParagraphs(payload.worksheet_text),
+          ...lineBreakParagraphs(normalizeGeneratedText(payload.worksheet_text)),
           new Paragraph({ text: "" }),
           new Paragraph({ text: "4) 예시답안", heading: HeadingLevel.HEADING_2 }),
-          ...lineBreakParagraphs(payload.answer_example_text)
+          ...lineBreakParagraphs(normalizeGeneratedText(payload.answer_example_text))
         ]
       }
     ]
@@ -408,6 +409,14 @@ async function downloadPerformanceDocx(payload) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function normalizeGeneratedText(text) {
+  return String(text || "")
+    .replace(/\*\*/g, "")
+    .replace(/__/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
 }
 
 async function handlePerformanceSubmit(event) {
@@ -445,10 +454,10 @@ async function handlePerformanceSubmit(event) {
       subject,
       domain: domainEntry.domain,
       standard: domainEntry.standard,
-      plan_text: result.plan_text || "",
-      rubric_text: result.rubric_text || "",
-      worksheet_text: result.worksheet_text || "",
-      answer_example_text: result.answer_example_text || ""
+      plan_text: normalizeGeneratedText(result.plan_text || ""),
+      rubric_text: normalizeGeneratedText(result.rubric_text || ""),
+      worksheet_text: normalizeGeneratedText(result.worksheet_text || ""),
+      answer_example_text: normalizeGeneratedText(result.answer_example_text || "")
     };
 
     const summary = document.createElement("div");
