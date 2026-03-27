@@ -38,6 +38,45 @@ async function callGemini({ apiKey, systemPrompt, userPrompt }) {
   return parseJsonSafely(text);
 }
 
+function buildFallbackResult({ grade, subject, domainEntry, compactBase, requestText }) {
+  const req = requestText ? `추가 요청: ${requestText}` : "추가 요청: 없음";
+  return {
+    plan_text: [
+      `${grade} ${subject} ${domainEntry.domain} 영역 수행평가를 성취기준 중심으로 운영함.`,
+      `핵심 성취기준: ${domainEntry.standard}`,
+      `평가요소: ${compactBase.evaluation_element || "핵심 개념 이해 및 적용"}`,
+      `수업·평가 방법: ${compactBase.lesson_assessment_method || "활동 중심 수업과 관찰·산출물 평가를 병행함."}`,
+      `평가시기: ${compactBase.assessment_time || "학기 중 단원 학습 완료 시점"}`,
+      req,
+      "준비물: 학생 활동지, 필기구, 발표 자료(필요 시).",
+      "운영 팁: 단계별 안내 후 개별 수행과 피드백을 제공함."
+    ].join("\n"),
+    rubric_text: [
+      "상: 평가요소를 정확히 수행하고 근거를 명확히 설명함.",
+      "중: 평가요소를 대체로 수행하고 일부 설명함.",
+      "하: 평가요소의 일부를 수행하며 안내에 따라 참여함.",
+      `기준 참고(잘함): ${compactBase.criteria_well || "-"}`,
+      `기준 참고(보통): ${compactBase.criteria_mid || "-"}`,
+      `기준 참고(노력요함): ${compactBase.criteria_need || "-"}`
+    ].join("\n"),
+    worksheet_text: [
+      "[학생용 수행평가지]",
+      "1. 활동 목표를 읽고 오늘 수행할 과제를 확인하세요.",
+      "2. 제시된 자료를 보고 핵심 내용을 정리하세요.",
+      "3. 문제를 해결하고 결과를 서술 또는 발표 자료로 작성하세요.",
+      "4. 자기점검: 이해한 점 1가지, 더 연습할 점 1가지를 쓰세요.",
+      "5. 제출물: 활동지/결과물/발표 내용"
+    ].join("\n"),
+    answer_example_text: [
+      "[예시답안]",
+      "문항 1) 핵심 개념을 정확히 설명하고 적용 사례를 제시함.",
+      "문항 2) 제시 자료를 근거로 자신의 생각을 논리적으로 서술함.",
+      "문항 3) 활동 결과를 정리하여 전달력 있게 발표함.",
+      "자기점검) 잘한 점과 보완할 점을 구체적으로 작성함."
+    ].join("\n")
+  };
+}
+
 function parseJsonSafely(rawText) {
   const text = String(rawText || "").trim();
   if (!text) throw new Error("빈 JSON 응답입니다.");
@@ -119,7 +158,13 @@ export default async function handler(req, res) {
 }
 `;
 
-    const parsed = await callGemini({ apiKey, systemPrompt, userPrompt });
+    let parsed;
+    try {
+      parsed = await callGemini({ apiKey, systemPrompt, userPrompt });
+    } catch (_firstError) {
+      // 1차 생성 실패 시 폴백 결과를 반환하여 수업 설계 흐름이 중단되지 않도록 처리
+      parsed = buildFallbackResult({ grade, subject, domainEntry, compactBase, requestText });
+    }
     return res.status(200).json({
       plan_text: String(parsed?.plan_text || "").trim(),
       rubric_text: String(parsed?.rubric_text || "").trim(),
