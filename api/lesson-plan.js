@@ -1,5 +1,4 @@
 const MODEL = "gemini-2.5-flash";
-export const config = { maxDuration: 60 };
 
 function trimText(value, max = 700) {
   const text = String(value || "").trim();
@@ -116,6 +115,72 @@ ${String(rawText || "").slice(0, 14000)}
   return parseJsonSafely(text);
 }
 
+function coerceLessonPlanFromText(rawText) {
+  const text = String(rawText || "").trim();
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const take = (idx) => lines[idx] || "";
+  return {
+    meta: {
+      unit: take(0),
+      class_target: take(1),
+      datetime: take(2),
+      lesson_time_page: take(3),
+      teaching_model: take(4),
+      competency: take(5),
+      area: take(6),
+      core_idea: take(7),
+      achievement_standard: take(8),
+      inquiry_question: take(9),
+      learning_objective: take(10),
+      learning_topic: take(11),
+      teacher_intent: lines.slice(12, 18).join(" ")
+    },
+    evaluation_plan: [
+      {
+        category: "통합",
+        method: "관찰/서술",
+        element: lines.slice(18, 21).join(" "),
+        level_high: lines.slice(21, 23).join(" "),
+        level_mid: lines.slice(23, 25).join(" "),
+        level_low: lines.slice(25, 27).join(" "),
+        feedback: lines.slice(27, 31).join(" ")
+      }
+    ],
+    learning_process: [
+      {
+        stage: "도입",
+        learning_form: "전체",
+        teacher_activity: lines.slice(31, 34).join(" "),
+        student_activity: lines.slice(34, 37).join(" "),
+        minutes: "5",
+        materials: "",
+        notes: "",
+        assessment: ""
+      },
+      {
+        stage: "전개",
+        learning_form: "모둠/개별",
+        teacher_activity: lines.slice(37, 41).join(" "),
+        student_activity: lines.slice(41, 45).join(" "),
+        minutes: "30",
+        materials: "",
+        notes: "",
+        assessment: ""
+      },
+      {
+        stage: "정리",
+        learning_form: "전체",
+        teacher_activity: lines.slice(45, 48).join(" "),
+        student_activity: lines.slice(48, 51).join(" "),
+        minutes: "5",
+        materials: "",
+        notes: "",
+        assessment: ""
+      }
+    ]
+  };
+}
+
 async function callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries = 3 }) {
   let lastError;
   for (let i = 0; i < retries; i += 1) {
@@ -130,7 +195,7 @@ async function callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries =
   throw lastError || new Error("Gemini 호출 실패");
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY 환경변수가 설정되지 않았습니다." });
@@ -217,12 +282,25 @@ export default async function handler(req, res) {
     try {
       parsed = await callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries: 3 });
     } catch (_error) {
-      const rawText = await callGeminiText({
-        apiKey,
-        systemPrompt: "아래 요청에 대해 텍스트로 상세히 답변하라.",
-        userPrompt
-      });
-      parsed = await normalizeToJsonWithGemini({ apiKey, rawText });
+      let rawText = "";
+      try {
+        rawText = await callGeminiText({
+          apiKey,
+          systemPrompt: "아래 요청에 대해 텍스트로 상세히 답변하라.",
+          userPrompt
+        });
+      } catch (_textError) {
+        rawText = "";
+      }
+      if (rawText) {
+        try {
+          parsed = await normalizeToJsonWithGemini({ apiKey, rawText });
+        } catch (_normalizeError) {
+          parsed = coerceLessonPlanFromText(rawText);
+        }
+      } else {
+        parsed = { meta: {}, evaluation_plan: [], learning_process: [] };
+      }
     }
     return res.status(200).json({
       meta: parsed?.meta || {},
@@ -235,3 +313,5 @@ export default async function handler(req, res) {
     });
   }
 }
+
+module.exports = handler;

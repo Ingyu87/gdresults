@@ -76,7 +76,7 @@ async function callGemini({ apiKey, systemPrompt, userPrompt }) {
   return JSON.parse(text);
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
@@ -107,3 +107,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: error.message || "서버 오류" });
   }
 }
+
+module.exports = handler;
