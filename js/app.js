@@ -7,14 +7,23 @@ const gradeSelect = document.getElementById("grade-select");
 const subjectSelect = document.getElementById("subject-select");
 const tabOpinionBtn = document.getElementById("tab-opinion-btn");
 const tabPerformanceBtn = document.getElementById("tab-performance-btn");
+const tabLessonBtn = document.getElementById("tab-lesson-btn");
 const tabOpinionSection = document.getElementById("tab-opinion-section");
 const tabPerformanceSection = document.getElementById("tab-performance-section");
+const tabLessonSection = document.getElementById("tab-lesson-section");
 const performanceForm = document.getElementById("performance-form");
 const perfGradeSelect = document.getElementById("perf-grade-select");
 const perfSubjectSelect = document.getElementById("perf-subject-select");
 const perfDomainSelect = document.getElementById("perf-domain-select");
 const performanceResults = document.getElementById("performance-results");
 const performanceSubmitBtn = document.getElementById("performance-submit-btn");
+const lessonForm = document.getElementById("lesson-form");
+const lessonGradeSelect = document.getElementById("lesson-grade-select");
+const lessonSubjectSelect = document.getElementById("lesson-subject-select");
+const lessonDomainSelect = document.getElementById("lesson-domain-select");
+const lessonRequest = document.getElementById("lesson-request");
+const lessonResults = document.getElementById("lesson-results");
+const lessonSubmitBtn = document.getElementById("lesson-submit-btn");
 
 let toastTimer;
 let globalGeneratedData = {};
@@ -75,6 +84,34 @@ function updatePerformanceDomainSelect(selectedGrade, selectedSubject) {
     option.value = String(index);
     option.textContent = `${entry.domain}`;
     perfDomainSelect.appendChild(option);
+  });
+}
+
+function updateLessonSubjectSelect(selectedGrade) {
+  lessonSubjectSelect.innerHTML = "";
+  const subjects = Object.keys(evaluationPlanData[selectedGrade] || {});
+  if (subjects.length === 0) return;
+  subjects.forEach((subject) => {
+    const option = document.createElement("option");
+    option.value = subject;
+    option.textContent = subject;
+    lessonSubjectSelect.appendChild(option);
+  });
+  lessonSubjectSelect.value = subjects[0];
+  updateLessonDomainSelect(selectedGrade, lessonSubjectSelect.value);
+}
+
+function updateLessonDomainSelect(selectedGrade, selectedSubject) {
+  lessonDomainSelect.innerHTML = "";
+  const domains =
+    performancePlanData[selectedGrade]?.[selectedSubject] ||
+    evaluationPlanData[selectedGrade]?.[selectedSubject] ||
+    [];
+  domains.forEach((entry, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = entry.domain;
+    lessonDomainSelect.appendChild(option);
   });
 }
 
@@ -215,10 +252,14 @@ function showToast(message) {
 
 function setActiveTab(tab) {
   const isOpinion = tab === "opinion";
+  const isPerformance = tab === "performance";
+  const isLesson = tab === "lesson";
   tabOpinionSection.classList.toggle("hidden", !isOpinion);
-  tabPerformanceSection.classList.toggle("hidden", isOpinion);
+  tabPerformanceSection.classList.toggle("hidden", !isPerformance);
+  tabLessonSection.classList.toggle("hidden", !isLesson);
   tabOpinionBtn.className = `tab-btn px-4 py-2 rounded-lg font-semibold ${isOpinion ? "bg-blue-600 text-white" : "bg-slate-200 text-slate-700"}`;
-  tabPerformanceBtn.className = `tab-btn px-4 py-2 rounded-lg font-semibold ${isOpinion ? "bg-slate-200 text-slate-700" : "bg-purple-600 text-white"}`;
+  tabPerformanceBtn.className = `tab-btn px-4 py-2 rounded-lg font-semibold ${isPerformance ? "bg-purple-600 text-white" : "bg-slate-200 text-slate-700"}`;
+  tabLessonBtn.className = `tab-btn px-4 py-2 rounded-lg font-semibold ${isLesson ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-700"}`;
 }
 
 function shuffleArray(array) {
@@ -332,6 +373,31 @@ async function requestPerformanceDesign({ grade, subject, domainEntry, requestTe
     })
   });
 
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload?.error || `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload;
+}
+
+async function requestLessonPlan({ grade, subject, domainEntry, requestText }) {
+  const response = await fetch("/api/lesson-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grade,
+      subject,
+      domainEntry: { domain: domainEntry.domain, standard: domainEntry.standard },
+      requestText,
+      baseData: {
+        evaluation_element: domainEntry.evaluation_element || "",
+        lesson_assessment_method: domainEntry.lesson_assessment_method || "",
+        criteria: domainEntry.criteria || {},
+        assessment_time: domainEntry.assessment_time || ""
+      }
+    })
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = payload?.error || `HTTP ${response.status}`;
@@ -517,6 +583,142 @@ async function handlePerformanceSubmit(event) {
   }
 }
 
+function createCopyableTable(title, headers, rows) {
+  const box = document.createElement("div");
+  box.className = "border border-slate-200 rounded-lg bg-white overflow-hidden";
+  const thead = headers.map((h) => `<th class="p-3 text-left text-xs font-semibold text-gray-500 uppercase border-b border-slate-200">${h}</th>`).join("");
+  const tbody = rows
+    .map((row) => {
+      const cells = row.map((cell) => `<td class="p-3 text-sm text-gray-800 border-b border-slate-100 align-top">${String(cell || "").replace(/\n/g, "<br>")}</td>`).join("");
+      const copyText = row.join(" | ");
+      return `<tr class="lesson-copy-row hover:bg-indigo-50 cursor-pointer" data-copy="${copyText.replace(/"/g, "&quot;")}">${cells}</tr>`;
+    })
+    .join("");
+  box.innerHTML = `
+    <div class="p-3 bg-indigo-50 border-b border-indigo-200 font-semibold text-indigo-800">${title} (행 클릭 시 복사)</div>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[900px] border-collapse">
+        <thead class="bg-slate-50"><tr>${thead}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>
+  `;
+  box.addEventListener("click", async (event) => {
+    const row = event.target.closest(".lesson-copy-row");
+    if (!row) return;
+    const text = row.dataset.copy || "";
+    const ok = await copyToClipboard(text);
+    showToast(ok ? "행 내용이 복사되었습니다." : "복사에 실패했습니다.");
+  });
+  return box;
+}
+
+async function handleLessonSubmit(event) {
+  event.preventDefault();
+  lessonSubmitBtn.disabled = true;
+  lessonSubmitBtn.textContent = "생성 중...";
+  lessonResults.innerHTML = `
+    <div class="p-8 text-center text-gray-500 bg-white rounded-lg shadow-md border border-slate-200 flex flex-col items-center justify-center">
+      <div class="loader mb-4"></div>
+      <p class="font-medium text-indigo-600">교수학습과정안(평가 기반) 표를 생성 중입니다...</p>
+    </div>
+  `;
+
+  const grade = lessonGradeSelect.value;
+  const subject = lessonSubjectSelect.value;
+  const domainIndex = Number.parseInt(lessonDomainSelect.value, 10);
+  const domainEntry =
+    performancePlanData[grade]?.[subject]?.[domainIndex] ||
+    evaluationPlanData[grade]?.[subject]?.[domainIndex];
+
+  if (!domainEntry) {
+    lessonResults.innerHTML = `<p class="p-8 text-center text-red-500 bg-white rounded-lg shadow-md border border-red-200">영역 정보를 찾지 못했습니다.</p>`;
+    lessonSubmitBtn.disabled = false;
+    lessonSubmitBtn.textContent = "교수학습과정안(평가 기반) 표 생성하기";
+    return;
+  }
+
+  try {
+    const result = await requestLessonPlan({
+      grade,
+      subject,
+      domainEntry,
+      requestText: (lessonRequest.value || "").trim()
+    });
+    lessonResults.innerHTML = "";
+
+    const summary = document.createElement("div");
+    summary.className = "p-4 border border-indigo-200 rounded-lg bg-indigo-50 text-indigo-900";
+    summary.innerHTML = `
+      <p class="font-semibold">${grade} ${subject} / ${domainEntry.domain}</p>
+      <p class="text-sm mt-1">${domainEntry.standard}</p>
+    `;
+    lessonResults.appendChild(summary);
+
+    lessonResults.appendChild(
+      createCopyableTable(
+        "기본 정보",
+        ["항목", "내용"],
+        [
+          ["단원", result.meta?.unit || ""],
+          ["대상 학급", result.meta?.class_target || ""],
+          ["일시", result.meta?.datetime || ""],
+          ["차시(교과서 쪽수)", result.meta?.lesson_time_page || ""],
+          ["교수·학습 모형", result.meta?.teaching_model || ""],
+          ["교과 역량", result.meta?.competency || ""],
+          ["영역", result.meta?.area || ""],
+          ["핵심 아이디어", result.meta?.core_idea || ""],
+          ["성취기준", result.meta?.achievement_standard || ""],
+          ["탐구 질문", result.meta?.inquiry_question || ""],
+          ["학습 목표", result.meta?.learning_objective || ""],
+          ["학습 주제", result.meta?.learning_topic || ""],
+          ["수업자 의도(수업·평가 주안점)", result.meta?.teacher_intent || ""]
+        ]
+      )
+    );
+
+    const evalRows = (result.evaluation_plan || []).map((item) => [
+      item.category || "",
+      item.method || "",
+      item.element || "",
+      item.level_high || "",
+      item.level_mid || "",
+      item.level_low || "",
+      item.feedback || ""
+    ]);
+    lessonResults.appendChild(
+      createCopyableTable(
+        "평가 계획",
+        ["범주", "평가 방법", "평가 요소", "상", "중", "하", "피드백"],
+        evalRows
+      )
+    );
+
+    const activityRows = (result.learning_process || []).map((item) => [
+      item.stage || "",
+      item.learning_form || "",
+      item.teacher_activity || "",
+      item.student_activity || "",
+      item.minutes || "",
+      item.materials || "",
+      item.notes || "",
+      item.assessment || ""
+    ]);
+    lessonResults.appendChild(
+      createCopyableTable(
+        "교수·학습 활동",
+        ["학습 단계", "학습형태", "교사 활동", "학생 활동", "시간(분)", "자료(㉶)", "유의점(◯유)", "평가(◯평)"],
+        activityRows
+      )
+    );
+  } catch (error) {
+    lessonResults.innerHTML = `<p class="p-8 text-center text-red-500 bg-white rounded-lg shadow-md border border-red-200">생성 실패: ${error.message}</p>`;
+  } finally {
+    lessonSubmitBtn.disabled = false;
+    lessonSubmitBtn.textContent = "교수학습과정안(평가 기반) 표 생성하기";
+  }
+}
+
 async function generateAiResults(grade, subject, counts, subjectData) {
   resultsContent.innerHTML = `
     <div class="p-10 text-center text-gray-500 bg-white rounded-lg shadow-md border border-slate-200 flex flex-col items-center justify-center">
@@ -635,12 +837,20 @@ function bindEvents() {
   perfSubjectSelect.addEventListener("change", () => {
     updatePerformanceDomainSelect(perfGradeSelect.value, perfSubjectSelect.value);
   });
+  lessonGradeSelect.addEventListener("change", () => {
+    updateLessonSubjectSelect(lessonGradeSelect.value);
+  });
+  lessonSubjectSelect.addEventListener("change", () => {
+    updateLessonDomainSelect(lessonGradeSelect.value, lessonSubjectSelect.value);
+  });
 
   settingsForm.addEventListener("submit", handleSubmit);
   combineButton.addEventListener("click", generateCombinedOpinion);
   performanceForm.addEventListener("submit", handlePerformanceSubmit);
+  lessonForm.addEventListener("submit", handleLessonSubmit);
   tabOpinionBtn.addEventListener("click", () => setActiveTab("opinion"));
   tabPerformanceBtn.addEventListener("click", () => setActiveTab("performance"));
+  tabLessonBtn.addEventListener("click", () => setActiveTab("lesson"));
 
   resultsContent.addEventListener("click", async (event) => {
     const header = event.target.closest(".accordion-header");
@@ -677,6 +887,9 @@ async function init() {
     perfGradeSelect.innerHTML = gradeSelect.innerHTML;
     perfGradeSelect.value = gradeSelect.value;
     updatePerformanceSubjectSelect(perfGradeSelect.value);
+    lessonGradeSelect.innerHTML = gradeSelect.innerHTML;
+    lessonGradeSelect.value = gradeSelect.value;
+    updateLessonSubjectSelect(lessonGradeSelect.value);
     resultsContent.innerHTML = DEFAULT_HINT_HTML;
     setActiveTab("opinion");
     bindEvents();
