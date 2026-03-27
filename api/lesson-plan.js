@@ -40,11 +40,15 @@ async function callGemini({ apiKey, systemPrompt, userPrompt }) {
     }
   };
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: controller.signal
   });
+  clearTimeout(timeout);
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Gemini API 오류(${response.status}): ${errorText}`);
@@ -53,6 +57,77 @@ async function callGemini({ apiKey, systemPrompt, userPrompt }) {
   const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini 응답 텍스트가 없습니다.");
   return parseJsonSafely(text);
+}
+
+async function callGeminiText({ apiKey, systemPrompt, userPrompt }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: userPrompt }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      temperature: 0.2,
+      topP: 0.9
+    }
+  };
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini 텍스트 호출 실패(${response.status}): ${errorText}`);
+  }
+  const result = await response.json();
+  return String(result?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+}
+
+async function normalizeToJsonWithGemini({ apiKey, rawText }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+  const prompt = `
+다음 텍스트를 아래 키를 갖는 JSON으로 변환:
+keys:
+- meta(unit, class_target, datetime, lesson_time_page, teaching_model, competency, area, core_idea, achievement_standard, inquiry_question, learning_objective, learning_topic, teacher_intent)
+- evaluation_plan(array of {category, method, element, level_high, level_mid, level_low, feedback})
+- learning_process(array of {stage, learning_form, teacher_activity, student_activity, minutes, materials, notes, assessment})
+
+텍스트:
+${String(rawText || "").slice(0, 14000)}
+`;
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.1
+    }
+  };
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`JSON 정규화 실패(${response.status}): ${errorText}`);
+  }
+  const result = await response.json();
+  const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("JSON 정규화 응답 텍스트가 없습니다.");
+  return parseJsonSafely(text);
+}
+
+async function callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries = 3 }) {
+  let lastError;
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      return await callGemini({ apiKey, systemPrompt, userPrompt });
+    } catch (error) {
+      lastError = error;
+      const wait = 800 * Math.pow(2, i);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  throw lastError || new Error("Gemini 호출 실패");
 }
 
 export default async function handler(req, res) {
@@ -138,13 +213,25 @@ export default async function handler(req, res) {
 }
 `;
 
-    const parsed = await callGemini({ apiKey, systemPrompt, userPrompt });
+    let parsed;
+    try {
+      parsed = await callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries: 3 });
+    } catch (_error) {
+      const rawText = await callGeminiText({
+        apiKey,
+        systemPrompt: "아래 요청에 대해 텍스트로 상세히 답변하라.",
+        userPrompt
+      });
+      parsed = await normalizeToJsonWithGemini({ apiKey, rawText });
+    }
     return res.status(200).json({
       meta: parsed?.meta || {},
       evaluation_plan: Array.isArray(parsed?.evaluation_plan) ? parsed.evaluation_plan : [],
       learning_process: Array.isArray(parsed?.learning_process) ? parsed.learning_process : []
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message || "서버 오류" });
+    return res.status(500).json({
+      error: `Gemini 생성에 실패했습니다. 잠시 후 다시 시도해주세요. (${error.message || "서버 오류"})`
+    });
   }
 }

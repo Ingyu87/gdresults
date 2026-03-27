@@ -10,16 +10,6 @@ function trimText(value, max = 700) {
 }
 
 async function callGemini({ apiKey, systemPrompt, userPrompt }) {
-  const schema = {
-    type: "OBJECT",
-    properties: {
-      plan_text: { type: "STRING" },
-      rubric_text: { type: "STRING" },
-      worksheet_text: { type: "STRING" },
-      answer_example_text: { type: "STRING" }
-    },
-    required: ["plan_text", "rubric_text", "worksheet_text", "answer_example_text"]
-  };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
   const payload = {
     contents: [{ parts: [{ text: userPrompt }] }],
@@ -27,8 +17,7 @@ async function callGemini({ apiKey, systemPrompt, userPrompt }) {
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0.4,
-      topP: 0.9,
-      responseSchema: schema
+      topP: 0.9
     }
   };
 
@@ -50,6 +39,60 @@ async function callGemini({ apiKey, systemPrompt, userPrompt }) {
   const result = await response.json();
   const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini 응답 텍스트가 없습니다.");
+  return parseJsonSafely(text);
+}
+
+async function callGeminiText({ apiKey, systemPrompt, userPrompt }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: userPrompt }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      temperature: 0.2,
+      topP: 0.9
+    }
+  };
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini 텍스트 호출 실패(${response.status}): ${errorText}`);
+  }
+  const result = await response.json();
+  return String(result?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+}
+
+async function normalizeToJsonWithGemini({ apiKey, rawText }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`;
+  const prompt = `
+다음 텍스트를 아래 키를 가진 엄격한 JSON으로만 변환:
+keys: plan_text, rubric_text, worksheet_text, answer_example_text
+
+텍스트:
+${String(rawText || "").slice(0, 12000)}
+`;
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.1
+    }
+  };
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`JSON 정규화 실패(${response.status}): ${errorText}`);
+  }
+  const result = await response.json();
+  const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("JSON 정규화 응답 텍스트가 없습니다.");
   return parseJsonSafely(text);
 }
 
@@ -148,7 +191,18 @@ export default async function handler(req, res) {
 }
 `;
 
-    const parsed = await callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries: 3 });
+    let parsed;
+    try {
+      parsed = await callGeminiWithRetry({ apiKey, systemPrompt, userPrompt, retries: 3 });
+    } catch (_error) {
+      // 1차 호출이 JSON 형식으로 실패했을 때, 텍스트를 다시 JSON으로 정규화 시도
+      const rawText = await callGeminiText({
+        apiKey,
+        systemPrompt: "아래 요청에 대해 텍스트로 상세히 답변하라.",
+        userPrompt
+      });
+      parsed = await normalizeToJsonWithGemini({ apiKey, rawText });
+    }
     return res.status(200).json({
       plan_text: String(parsed?.plan_text || "").trim(),
       rubric_text: String(parsed?.rubric_text || "").trim(),
