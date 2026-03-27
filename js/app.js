@@ -20,6 +20,7 @@ let toastTimer;
 let globalGeneratedData = {};
 let evaluationPlanData = {};
 let performancePlanData = {};
+let latestPerformanceOutput = null;
 
 const DEFAULT_HINT_HTML = `
   <p class="p-10 text-center text-gray-500 bg-white rounded-lg shadow-md border border-slate-200">
@@ -317,7 +318,18 @@ async function requestPerformanceDesign({ grade, subject, domainEntry, requestTe
   const response = await fetch("/api/performance-design", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ grade, subject, domainEntry, requestText, baseData: domainEntry })
+    body: JSON.stringify({
+      grade,
+      subject,
+      domainEntry: { domain: domainEntry.domain, standard: domainEntry.standard },
+      requestText,
+      baseData: {
+        evaluation_element: domainEntry.evaluation_element || "",
+        lesson_assessment_method: domainEntry.lesson_assessment_method || "",
+        criteria: domainEntry.criteria || {},
+        assessment_time: domainEntry.assessment_time || ""
+      }
+    })
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -346,8 +358,61 @@ function createCopyCard(title, content, toneClass = "border-slate-200") {
   return box;
 }
 
+function toSafeFileName(text) {
+  return String(text || "document")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80);
+}
+
+async function downloadPerformanceDocx(payload) {
+  const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import("https://cdn.jsdelivr.net/npm/docx@8.5.0/+esm");
+  const lineBreakParagraphs = (text) =>
+    String(text || "")
+      .split(/\n+/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => new Paragraph({ children: [new TextRun(line)] }));
+
+  const doc = new Document({
+    sections: [
+      {
+        properties: {},
+        children: [
+          new Paragraph({ text: "수행평가 설계 및 문항 제작 결과", heading: HeadingLevel.TITLE }),
+          new Paragraph({ text: `${payload.grade} ${payload.subject} / ${payload.domain}`, heading: HeadingLevel.HEADING_2 }),
+          new Paragraph({ text: `성취기준: ${payload.standard}` }),
+          new Paragraph({ text: "" }),
+          new Paragraph({ text: "1) 수행평가 방안", heading: HeadingLevel.HEADING_2 }),
+          ...lineBreakParagraphs(payload.plan_text),
+          new Paragraph({ text: "" }),
+          new Paragraph({ text: "2) 평가기준(루브릭)", heading: HeadingLevel.HEADING_2 }),
+          ...lineBreakParagraphs(payload.rubric_text),
+          new Paragraph({ text: "" }),
+          new Paragraph({ text: "3) 수행평가지(학생용)", heading: HeadingLevel.HEADING_2 }),
+          ...lineBreakParagraphs(payload.worksheet_text),
+          new Paragraph({ text: "" }),
+          new Paragraph({ text: "4) 예시답안", heading: HeadingLevel.HEADING_2 }),
+          ...lineBreakParagraphs(payload.answer_example_text)
+        ]
+      }
+    ]
+  });
+
+  const blob = await Packer.toBlob(doc);
+  const fileName = `${toSafeFileName(`${payload.grade}_${payload.subject}_${payload.domain}`)}_수행평가.docx`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 async function handlePerformanceSubmit(event) {
   event.preventDefault();
+  latestPerformanceOutput = null;
   performanceSubmitBtn.disabled = true;
   performanceSubmitBtn.textContent = "생성 중...";
   performanceResults.innerHTML = `
@@ -375,6 +440,16 @@ async function handlePerformanceSubmit(event) {
   try {
     const result = await requestPerformanceDesign({ grade, subject, domainEntry, requestText });
     performanceResults.innerHTML = "";
+    latestPerformanceOutput = {
+      grade,
+      subject,
+      domain: domainEntry.domain,
+      standard: domainEntry.standard,
+      plan_text: result.plan_text || "",
+      rubric_text: result.rubric_text || "",
+      worksheet_text: result.worksheet_text || "",
+      answer_example_text: result.answer_example_text || ""
+    };
 
     const summary = document.createElement("div");
     summary.className = "p-4 border border-purple-200 rounded-lg bg-purple-50 text-purple-900";
@@ -401,6 +476,26 @@ async function handlePerformanceSubmit(event) {
     performanceResults.appendChild(createCopyCard("수행평가 방안", result.plan_text || "", "border-purple-200"));
     performanceResults.appendChild(createCopyCard("평가기준(루브릭)", result.rubric_text || "", "border-indigo-200"));
     performanceResults.appendChild(createCopyCard("수행평가지(학생용)", result.worksheet_text || "", "border-emerald-200"));
+    performanceResults.appendChild(createCopyCard("문항 예시답안", result.answer_example_text || "", "border-amber-200"));
+
+    const downloadWrap = document.createElement("div");
+    downloadWrap.className = "p-4 border border-slate-200 rounded-lg bg-white";
+    downloadWrap.innerHTML = `
+      <button type="button" id="download-docx-btn" class="w-full bg-slate-900 text-white font-semibold py-3 rounded-lg hover:bg-slate-800">
+        DOCX 파일 다운로드
+      </button>
+    `;
+    const downloadBtn = downloadWrap.querySelector("#download-docx-btn");
+    downloadBtn.addEventListener("click", async () => {
+      if (!latestPerformanceOutput) return;
+      try {
+        await downloadPerformanceDocx(latestPerformanceOutput);
+        showToast("DOCX 다운로드를 시작했습니다.");
+      } catch (error) {
+        showToast(`DOCX 생성 실패: ${error.message}`);
+      }
+    });
+    performanceResults.appendChild(downloadWrap);
   } catch (error) {
     performanceResults.innerHTML = `
       <p class="p-8 text-center text-red-500 bg-white rounded-lg shadow-md border border-red-200">
